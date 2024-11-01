@@ -105,8 +105,10 @@ def get_response(message: str):
             ],
         }
     )
+    
+    print('response======>', response["answer"])
                 
-    return response.answer
+    return response["answer"]
 
 
 @app.route("/embed", methods=["POST"])
