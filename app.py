@@ -1,9 +1,11 @@
 import os
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, Response, stream_with_context, jsonify
 from dotenv import load_dotenv
 from flask_cors import CORS, cross_origin
 import time
 from pinecone import Pinecone, ServerlessSpec
+import json
+from werkzeug.utils import secure_filename
 
 from langchain_openai import ChatOpenAI
 
@@ -114,48 +116,65 @@ def get_response(message: str):
 @app.route("/embed", methods=["POST"])
 # @cross_origin()
 def embed_json():
-    body = request.json
-    documents = []
-    for item in body["data"]:
-        documents.append(Document(
-            page_content=f'{item}',
-            metadata={},
-        ))
+    # Check if a file is present in the request
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
 
-    print(documents)
+    file = request.files['file']
 
-    embeddings_model = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-    # embeddings = embeddings_model.embed_documents(texts=csv_data)
+    # If the user does not select a file, the browser submits an
+    # empty file without a filename.
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
 
-    print(PINECONE_KEY)
-    pc = Pinecone(api_key=PINECONE_KEY)
+    if file:
+        # You could validate the file name or its extensions here
+        filename = secure_filename(file.filename)
+        
+        # Read and parse the JSON file
+        data = json.load(file)
 
-    index_name = PINECONE_INDEX
-    namespace = PINECONE_NAMESPACE
+        documents = []
+        for item in data:
+            documents.append(Document(
+                page_content=str(item),  # Adjust based on what you want from each item
+                metadata={},
+            ))
 
-    existing_indexes = [index_info["name"] for index_info in pc.list_indexes()]
+        embeddings_model = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+        # embeddings = embeddings_model.embed_documents(texts=csv_data)
 
-    if index_name not in existing_indexes:
-        pc.create_index(
-            name=index_name,
-            dimension=1536,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+        print(PINECONE_KEY)
+        pc = Pinecone(api_key=PINECONE_KEY)
+
+        index_name = PINECONE_INDEX
+        namespace = PINECONE_NAMESPACE
+
+        existing_indexes = [index_info["name"] for index_info in pc.list_indexes()]
+
+        if index_name not in existing_indexes:
+            pc.create_index(
+                name=index_name,
+                dimension=1536,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+            )
+            while not pc.describe_index(index_name).status["ready"]:
+                time.sleep(1)
+
+        index = pc.Index(index_name)
+
+        # The OpenAI embedding model `text-embedding-ada-002 uses 1536 dimensions`
+        docsearch = PineconeVectorStore.from_documents(
+            documents,
+            embeddings_model,
+            index_name=index_name,
+            namespace=namespace,
         )
-        while not pc.describe_index(index_name).status["ready"]:
-            time.sleep(1)
 
-    index = pc.Index(index_name)
-
-    # The OpenAI embedding model `text-embedding-ada-002 uses 1536 dimensions`
-    docsearch = PineconeVectorStore.from_documents(
-        documents,
-        embeddings_model,
-        index_name=index_name,
-        namespace=namespace,
-    )
-
-    return "Success"
+        return "Success"
+    else:
+        return jsonify({"error": "Unsupported file type"}), 400
 
 
 @app.route("/chat", methods=["POST"])
